@@ -1163,6 +1163,8 @@ private void handleChildProc(Arguments parsedArgs,
 
 # 应用程序从Lanuncher点击到启动的过程
 
+
+
 当我们点击应用程序的快捷图标时就会调用Launcher的startActivitySafely方法。  
 **packages/apps/Launcher3/src/com/android/launcher3/Launcher.java**
 
@@ -1360,5 +1362,79 @@ public int startActivity(IApplicationThread caller, String callingPackage, Inten
 ```
 
 ```java
-
+@Override
+ public final int startActivity(IApplicationThread caller, String callingPackage,
+         Intent intent, String resolvedType, IBinder resultTo, String resultWho, int requestCode,
+         int startFlags, ProfilerInfo profilerInfo, Bundle bOptions) {
+     return startActivityAsUser(caller, callingPackage, intent, resolvedType, resultTo,
+             resultWho, requestCode, startFlags, profilerInfo, bOptions,
+             UserHandle.getCallingUserId());
+ }
 ```
+
+调用startActivityAsUser
+
+```java
+@Override
+    public final int startActivityAsUser(IApplicationThread caller, String callingPackage,
+            Intent intent, String resolvedType, IBinder resultTo, String resultWho, int requestCode,
+            int startFlags, ProfilerInfo profilerInfo, Bundle options, int userId) {
+        enforceNotIsolatedCaller("startActivity");
+        return mStackSupervisor.startActivityMayWait(caller, -1, callingPackage, intent,
+                resolvedType, null, null, resultTo, resultWho, requestCode, startFlags,
+                profilerInfo, null, null, options, userId, null, null);
+    }
+```
+
+后续基本都是嵌套调用，所以直接给出调用链
+
+![Vek5NV.png](https://s2.ax1x.com/2019/05/28/Vek5NV.png)
+
+**frameworks/base/services/core/java/com/android/server/am/ActivityStackSupervisor.java**
+
+```java
+void startSpecificActivityLocked(ActivityRecord r,
+           boolean andResume, boolean checkConfig) {
+       //获取即将要启动的Activity的所在的应用程序进程
+       ProcessRecord app = mService.getProcessRecordLocked(r.processName,
+               r.info.applicationInfo.uid, true);//1
+       r.getStack().setLaunchTime(r);
+
+       if (app != null && app.thread != null) {//2
+           try {
+               if ((r.info.flags&ActivityInfo.FLAG_MULTIPROCESS) == 0
+                       || !"android".equals(r.info.packageName)) {
+                   app.addPackage(r.info.packageName, r.info.applicationInfo.versionCode,
+                           mService.mProcessStats);
+               }
+                // 初始化activity 说明有这个进程了，执行activity的启动就可以了
+               realStartActivityLocked(r, app, andResume, checkConfig);//3
+               return;
+           } catch (RemoteException e) {
+               Slog.w(TAG, "Exception when starting activity "
+                       + r.intent.getComponent().flattenToShortString(), e);
+         }
+       }
+        // 如果第一次就进入这里创建进程
+       mService.startProcessLocked(r.processName, r.info.applicationInfo, true, 0,
+               "activity", r.intent.getComponent(), false, false, true);
+   }
+```
+
+```java
+final boolean realStartActivityLocked(ActivityRecord r, ProcessRecord app,
+          boolean andResume, boolean checkConfig) throws RemoteException {
+   ...
+          app.thread.scheduleLaunchActivity(new Intent(r.intent), r.appToken,
+                  System.identityHashCode(r), r.info, new Configuration(mService.mConfiguration),
+                  new Configuration(task.mOverrideConfig), r.compat, r.launchedFromPackage,
+                  task.voiceInteractor, app.repProcState, r.icicle, r.persistentState, results,
+                  newIntents, !andResume, mService.isNextTransitionForward(), profilerInfo);
+
+  ...      
+
+      return true;
+  }
+```
+
+这里的 app.thread指的是IApplicationThread，它的实现是ActivityThread的内部类ApplicationThread，其中ApplicationThread继承了ApplicationThreadNative，而ApplicationThreadNative继承了Binder并实现了IApplicationThread接口。
