@@ -1,10 +1,27 @@
-
-
 ![VmiykV.png](https://s2.ax1x.com/2019/05/28/VmiykV.png)
 
 ## ART VS Dalivik
 
 运行时库又分为核心库和ART(5.0系统之后，Dalvik虚拟机被ART取代)。核心库提供了Java语言核心库的大多数功能，这样开发者可以使用Java语言来编写Android应用。相较于JVM，Dalvik虚拟机是专门为移动设备定制的，允许在有限的内存中同时运行多个虚拟机的实例，并且每一个Dalvik 应用作为一个独立的Linux 进程执行。独立的进程可以防止在虚拟机崩溃的时候所有程序都被关闭。而替代Dalvik虚拟机的ART 的机制与Dalvik 不同。在Dalvik下，应用每次运行的时候，字节码都需要通过即时编译器转换为机器码，这会拖慢应用的运行效率，而在ART 环境中，应用在第一次安装的时候，字节码就会预先编译成机器码，使其成为真正的本地应用。
+
+# Android系统启动流程
+
+**1.启动电源以及系统启动**  
+当电源按下时引导芯片代码开始从预定义的地方（固化在ROM）开始执行。加载引导程序Bootloader到RAM，然后执行。  
+**2.引导程序BootLoader**  
+引导程序BootLoader是在Android操作系统开始运行前的一个小程序，它的主要作用是把系统OS拉起来并运行。  
+**3.Linux内核启动**  
+内核启动时，设置缓存、被保护存储器、计划列表、加载驱动。当内核完成系统设置，它首先在系统文件中寻找init.rc文件，并启动init进程。  
+**4.init进程启动**  
+初始化和启动属性服务，并且启动Zygote进程。  
+**5.Zygote进程启动**  
+创建JavaVM并为JavaVM注册JNI，创建服务端Socket，启动SystemServer进程。  
+**6.SystemServer进程启动**  
+启动Binder线程池和SystemServiceManager，并且启动各种系统服务。  
+**7.Launcher启动**  
+被SystemServer进程启动的ActivityManagerService会启动Launcher，Launcher启动后会将已安装应用的快捷图标显示到界面上。
+
+![VeFzlQ.png](https://s2.ax1x.com/2019/05/27/VeFzlQ.png)
 
 ## Init
 
@@ -497,9 +514,6 @@ private static void invokeStaticMain(String className, String[] argv, ClassLoade
 **frameworks/base/services/java/com/android/server/SystemServer.java**
 
 ```java
-    /**
-     * The main entry point from zygote.
-     */
     public static void main(String[] args) {
         new SystemServer().run();
     }
@@ -592,7 +606,7 @@ run函数代码很多，关键就是在注释1处加载了libandroid_servers.so�
 
 注释1处的代码用来创建SystemService，这里的SystemService是PowerManagerService，在注释2处将PowerManagerService添加到mServices中，这里mServices是一个存储SystemService类型的ArrayList。接着调用PowerManagerService的onStart函数启动PowerManagerService并返回，这样就完成了PowerManagerService启动的过程。
 
-除了用mSystemServiceManager的startService函数来启动系统服务外，也可以通过如下形式来启动系统服务，以PackageManagerService为例
+除了用**mSystemServiceManager**的startService函数来启动系统服务外，也可以通过如下形式来启动系统服务，以PackageManagerService为例
 
 ```java
 mPackageManagerService = PackageManagerService.main(mSystemContext, installer,
@@ -621,14 +635,173 @@ public static PackageManagerService main(Context context, Installer installer,
 
 注释1处直接创建PackageManagerService并在注释2处将PackageManagerService注册到**ServiceManager**(第一种方式不是注册到ServiceManager，是注册到SystemServerManager)中，ServiceManager用来管理系统中的各种Service，用于系统C/S架构中的Binder机制通信：Client端要使用某个Service，则需要先到ServiceManager查询Service的相关信息，然后根据Service的相关信息与Service所在的Server进程建立通讯通路，这样Client端就可以使用Service了。还有的服务是直接注册到**ServiceManager**中的，如下所示。
 
-
-
 ### 总结SyetemServer进程
 
 SyetemServer在启动时做了如下工作：  
 1.启动Binder线程池，这样就可以与其他进程进行通信。  
 2.创建SystemServiceManager用于对系统的服务进行创建、启动和生命周期管理。  
 3.启动各种系统服务。
+
+## Launcher启动流程
+
+SyetemServer进程在启动的过程中会启动PackageManagerService，PackageManagerService启动后会将系统中的应用程序安装完成。在此前已经启动的ActivityManagerService会将Launcher启动起来。
+
+启动Launcher的入口为ActivityManagerService的systemReady函数
+
+**frameworks/base/services/java/com/android/server/SystemServer.java**
+
+```java
+ private void startOtherServices() {
+ ...
+  mActivityManagerService.systemReady(new Runnable() {
+            @Override
+            public void run() {
+                Slog.i(TAG, "Making services ready");
+                mSystemServiceManager.startBootPhase(
+                        SystemService.PHASE_ACTIVITY_MANAGER_READY);
+
+...
+}
+...
+}
+```
+
+在startOtherServices函数中，会调用ActivityManagerService的systemReady函数
+**frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java**
+
+```java
+public void systemReady(final Runnable goingCallback) {
+...
+synchronized (this) {
+           ...
+            mStackSupervisor.resumeTopActivitiesLocked();
+            sendUserSwitchBroadcastsLocked(-1, mCurrentUserId);
+           }
+    }
+```
+
+systemReady函数中调用了ActivityStackSupervisor的resumeFocusedStackTopActivityLocked函数
+**frameworks/base/services/core/java/com/android/server/am/ActivityStackSupervisor.java** 
+
+```java
+boolean resumeTopActivitiesLocked() {
+        return resumeTopActivitiesLocked(null, null, null);
+    }
+
+    boolean resumeTopActivitiesLocked(ActivityStack targetStack, ActivityRecord target,
+            Bundle targetOptions) {
+        if (targetStack == null) {
+            targetStack = getFocusedStack();
+        }
+        // Do targetStack first.
+        boolean result = false;
+        if (isFrontStack(targetStack)) {
+            // ActivityStack对象是用来描述Activity堆栈的，
+            result = targetStack.resumeTopActivityLocked(target, targetOptions);
+        }
+        for (int displayNdx = mActivityDisplays.size() - 1; displayNdx >= 0; --displayNdx) {
+            final ArrayList<ActivityStack> stacks = mActivityDisplays.valueAt(displayNdx).mStacks;
+            for (int stackNdx = stacks.size() - 1; stackNdx >= 0; --stackNdx) {
+                final ActivityStack stack = stacks.get(stackNdx);
+                if (stack == targetStack) {
+                    // Already started above.
+                    continue;
+                }
+                if (isFrontStack(stack)) {
+                    stack.resumeTopActivityLocked(null);
+                }
+            }
+        }
+        return result;
+    }
+```
+
+```java
+    Intent getHomeIntent() {
+        Intent intent = new Intent(mTopAction, mTopData != null ? Uri.parse(mTopData) : null);
+        intent.setComponent(mTopComponent);
+        if (mFactoryTest != FactoryTest.FACTORY_TEST_LOW_LEVEL) {
+            intent.addCategory(Intent.CATEGORY_HOME);
+        }
+        return intent;
+    }
+
+    boolean startHomeActivityLocked(int userId, String reason) {
+        if (mFactoryTest == FactoryTest.FACTORY_TEST_LOW_LEVEL
+                && mTopAction == null) {
+            return false;
+        }
+        Intent intent = getHomeIntent(); // 创建初始Instent也就是Launcher
+        ActivityInfo aInfo =
+            resolveActivityInfo(intent, STOCK_PM_FLAGS, userId);
+        if (aInfo != null) {
+            intent.setComponent(new ComponentName(
+                    aInfo.applicationInfo.packageName, aInfo.name));
+            aInfo = new ActivityInfo(aInfo);
+            aInfo.applicationInfo = getAppInfoForUser(aInfo.applicationInfo, userId);
+            ProcessRecord app = getProcessRecordLocked(aInfo.processName,
+                    aInfo.applicationInfo.uid, true);
+            // 开启activity
+            if (app == null || app.instrumentationClass == null) {
+                intent.setFlags(intent.getFlags() | Intent.FLAG_ACTIVITY_NEW_TASK);
+                mStackSupervisor.startHomeActivity(intent, aInfo, reason);
+            }
+        }
+
+        return true;
+    }
+```
+
+### Launcher Activity层
+
+**packages/apps/Launcher3/src/com/android/launcher3/Launcher.java**
+
+```java
+      @Override
+    protected void onCreate(Bundle savedInstanceState) {
+       // 获取实例
+        LauncherAppState app = LauncherAppState.getInstance();//1
+        mDeviceProfile = getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_LANDSCAPE ?
+                app.getInvariantDeviceProfile().landscapeProfile
+                : app.getInvariantDeviceProfile().portraitProfile;
+
+        mSharedPrefs = Utilities.getPrefs(this);
+        mIsSafeModeEnabled = getPackageManager().isSafeMode();
+      // 传入Launcher对象
+        mModel = app.setLauncher(this);//2
+        ....
+        if (!mRestoring) {
+            if (DISABLE_SYNCHRONOUS_BINDING_CURRENT_PAGE) {
+                mModel.startLoader(PagedView.INVALID_RESTORE_PAGE);//2
+            } else {
+                mModel.startLoader(mWorkspace.getRestorePage());
+            }
+        }
+...
+    }
+```
+
+ 调用到LauncherAppState
+
+```java
+LauncherModel setLauncher(Launcher launcher) {
+        mModel.initialize(launcher);
+        return mModel;
+    }
+```
+
+```java
+   */
+    public void initialize(Callbacks callbacks) {
+        synchronized (mLock) {
+             // 弱引用的回调
+              mCallbacks = new WeakReference<Callbacks>(callbacks);
+        }
+    }
+```
+
+在initialize函数中会将Callbacks，也就是传入的Launcher 封装成一个弱引用对象。因此我们得知mCallbacks变量指的就是封装成弱引用对象的Launcher，这个mCallbacks后文会用到它。
 
 ## Binder
 
@@ -690,3 +863,277 @@ Binder 是一个字符驱动，对应的设备文件是 `/dev/binder`，和其�
 ![](https://cdn.jsdelivr.net/gh/zzh0838/MyImages@main/img/20230703173026.png)
 
 ![](C:\Users\Lenovo\AppData\Roaming\marktext\images\2024-02-28-10-11-47-image.png)
+
+
+
+# 应用进程的启动流程
+
+![](https://s2.ax1x.com/2019/05/28/Vev4cq.png)
+
+## 发送创建进程的请求
+
+ActivityManagerService会通过调用startProcessLocked函数来向Zygote进程发送请求
+**frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java**
+
+```java
+private final void startProcessLocked(ProcessRecord app, String hostingType,
+          String hostingNameStr, String abiOverride, String entryPoint, String[] entryPointArgs) {
+      ...
+      try {
+          try {
+              final int userId = UserHandle.getUserId(app.uid);
+              AppGlobals.getPackageManager().checkPackageStartable(app.info.packageName, userId);
+          } catch (RemoteException e) {
+              throw e.rethrowAsRuntimeException();
+          }
+
+          int uid = app.uid;//1
+          int[] gids = null;
+          int mountExternal = Zygote.MOUNT_EXTERNAL_NONE;
+          if (!app.isolated) {
+            ...
+            /**
+            * 2 对gids进行创建和赋值
+            */
+              if (ArrayUtils.isEmpty(permGids)) {
+                  gids = new int[2];
+              } else {
+                  gids = new int[permGids.length + 2];
+                  System.arraycopy(permGids, 0, gids, 2, permGids.length);
+              }
+              gids[0] = UserHandle.getSharedAppGid(UserHandle.getAppId(uid));
+              gids[1] = UserHandle.getUserGid(UserHandle.getUserId(uid));
+          }
+       
+         ...
+          if (entryPoint == null) entryPoint = "android.app.ActivityThread";//3
+          Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "Start proc: " +
+                  app.processName);
+          checkTime(startTime, "startProcess: asking zygote to start proc");
+          /**
+          * 4
+          */
+          Process.ProcessStartResult startResult = Process.start(entryPoint,
+                  app.processName, uid, uid, gids, debugFlags, mountExternal,
+                  app.info.targetSdkVersion, app.info.seinfo, requiredAbi, instructionSet,
+                  app.info.dataDir, entryPointArgs);
+         ...
+      } catch (RuntimeException e) {
+        ...
+      }
+  }
+ ...
+  }
+
+```
+
+在注释1处的达到创建应用程序进程的用户ID，在注释2处对用户组ID：gids进行创建和赋值。注释3处如果entryPoint 为null则赋值为”android.app.ActivityThread”。在注释4处调用Process的start函数，将此前得到的应用程序进程用户ID和用户组ID传进去，第一个参数entryPoint我们得知是”android.app.ActivityThread”(其实就是每个应用程序的实例)，后文会再次提到它
+
+**frameworks/base/core/java/android/os/Process.java**
+
+```java
+public static final ProcessStartResult start(final String processClass,
+                              final String niceName,
+                              int uid, int gid, int[] gids,
+                              int debugFlags, int mountExternal,
+                              int targetSdkVersion,
+                              String seInfo,
+                              String abi,
+                              String instructionSet,
+                              String appDataDir,
+                              String[] zygoteArgs) {
+    try {
+        return startViaZygote(processClass, niceName, uid, gid, gids,
+                debugFlags, mountExternal, targetSdkVersion, seInfo,
+                abi, instructionSet, appDataDir, zygoteArgs);
+    } catch (ZygoteStartFailedEx ex) {
+      ...
+    }
+}
+```
+
+```java
+private static ProcessStartResult startViaZygote(final String processClass,
+                               final String niceName,
+                               final int uid, final int gid,
+                               final int[] gids,
+                               int debugFlags, int mountExternal,
+                               int targetSdkVersion,
+                               String seInfo,
+                               String abi,
+                               String instructionSet,
+                               String appDataDir,
+                               String[] extraArgs)
+                               throws ZygoteStartFailedEx {
+     synchronized(Process.class) {
+     /**
+     * 1
+     */
+         ArrayList<String> argsForZygote = new ArrayList<String>();
+         argsForZygote.add("--runtime-args");
+         argsForZygote.add("--setuid=" + uid);
+         argsForZygote.add("--setgid=" + gid);
+       ...
+         if (gids != null && gids.length > 0) {
+             StringBuilder sb = new StringBuilder();
+             sb.append("--setgroups=");
+
+             int sz = gids.length;
+             for (int i = 0; i < sz; i++) {
+                 if (i != 0) {
+                     sb.append(',');
+                 }
+                 sb.append(gids[i]);
+             }
+
+             argsForZygote.add(sb.toString());
+         }
+      ...
+         argsForZygote.add(processClass);
+         if (extraArgs != null) {
+             for (String arg : extraArgs) {
+                 argsForZygote.add(arg);
+             }
+         }
+         return zygoteSendArgsAndGetResult(openZygoteSocketIfNeeded(abi), argsForZygote);
+     }
+ }
+```
+
+封装args调用zygoteSendArgsAndGetResult
+
+```java
+private static ProcessStartResult zygoteSendArgsAndGetResult(
+          ZygoteState zygoteState, ArrayList<String> args)
+          throws ZygoteStartFailedEx {
+      try {
+          final BufferedWriter writer = zygoteState.writer;
+          final DataInputStream inputStream = zygoteState.inputStream;
+          writer.write(Integer.toString(args.size()));
+          writer.newLine();
+          int sz = args.size();
+          for (int i = 0; i < sz; i++) {
+              String arg = args.get(i);
+              if (arg.indexOf('\n') >= 0) {
+                  throw new ZygoteStartFailedEx(
+                          "embedded newlines not allowed");
+              }
+              writer.write(arg);
+              writer.newLine();
+          }
+          writer.flush();
+          // Should there be a timeout on this?
+          ProcessStartResult result = new ProcessStartResult();
+          result.pid = inputStream.readInt();
+          if (result.pid < 0) {
+              throw new ZygoteStartFailedEx("fork() failed");
+          }
+          result.usingWrapper = inputStream.readBoolean();
+          return result;
+      } catch (IOException ex) {
+          zygoteState.close();
+          throw new ZygoteStartFailedEx(ex);
+      }
+  }
+```
+
+zygoteSendArgsAndGetResult函数主要做的就是将传入的应用进程的启动参数argsForZygote，写入到ZygoteState中，而openZygoteSocketIfNeeded本质就是连接socket，socket的返回就是ZygoteState给zygoteSendArgsAndGetResult写入。
+
+## 接收请求并创建应用程序进程
+
+zygoteInit的main中会等待AMS发送消息。
+
+```java
+public static void main(String argv[]) {
+       ...
+        try {
+         ...       
+            //注册Zygote用的Socket
+            registerZygoteSocket(socketName);//1
+           ...
+           //预加载类和资源
+           preload();//2
+           ...
+            if (startSystemServer) {
+            //启动SystemServer进程
+                startSystemServer(abiList, socketName);//3
+            }
+            Log.i(TAG, "Accepting command socket connections");
+            //等待客户端请求
+            runSelectLoop(abiList);//4
+            closeServerSocket();
+        } catch (MethodAndArgsCaller caller) {
+            caller.run();
+        } catch (RuntimeException ex) {
+            Log.e(TAG, "Zygote died with exception", ex);
+            closeServerSocket();
+            throw ex;
+        }
+    }
+```
+
+当有ActivityManagerService的请求数据到来时会调用注释1处的代码，结合注释2处的代码，我们得知注释1处的代码其实是调用ZygoteConnection的runOnce函数来处理请求的数据：
+
+```java
+ boolean runOnce() throws ZygoteInit.MethodAndArgsCaller {
+        String args[];
+        Arguments parsedArgs = null;
+        FileDescriptor[] descriptors;
+        try {
+            args = readArgumentList();//1
+            descriptors = mSocket.getAncillaryFileDescriptors();
+        } catch (IOException ex) {
+            Log.w(TAG, "IOException on command socket " + ex.getMessage());
+            closeSocket();
+            return true;
+        }
+...
+        try {
+            parsedArgs = new Arguments(args);//2
+        ...
+        /**
+        * 3 
+        */
+            pid = Zygote.forkAndSpecialize(parsedArgs.uid, parsedArgs.gid, parsedArgs.gids,
+                    parsedArgs.debugFlags, rlimits, parsedArgs.mountExternal, parsedArgs.seInfo,
+                    parsedArgs.niceName, fdsToClose, parsedArgs.instructionSet,
+                    parsedArgs.appDataDir);
+        } catch (ErrnoException ex) {
+          ....
+        }
+       try {
+            if (pid == 0) {
+                // in child
+                IoUtils.closeQuietly(serverPipeFd);
+                serverPipeFd = null;
+                handleChildProc(parsedArgs, descriptors, childPipeFd, newStderr);
+                return true;
+            } else {
+                // in parent...pid of < 0 means failure
+                IoUtils.closeQuietly(childPipeFd);
+                childPipeFd = null;
+                return handleParentProc(pid, descriptors, serverPipeFd, parsedArgs);
+            }
+        } finally {
+            IoUtils.closeQuietly(childPipeFd);
+            IoUtils.closeQuietly(serverPipeFd);
+        }
+    }
+```
+
+在注释1处调用readArgumentList函数来获取应用程序进程的启动参数，并在注释2处将readArgumentList函数返回的字符串封装到Arguments对象parsedArgs中。注释3处调用Zygote的forkAndSpecialize函数来创建应用程序进程，参数为parsedArgs中存储的应用进程启动参数，返回值为pid。forkAndSpecialize函数主要是通过fork当前进程来创建一个子进程的，如果pid等于0，则说明是在新创建的子进程中执行的，就会调用handleChildProc函数来启动这个子进程也就是应用程序进程，如下所示。
+
+**frameworks/base/core/java/com/android/internal/os/ZygoteConnection.java**
+
+```java
+private void handleChildProc(Arguments parsedArgs,
+           FileDescriptor[] descriptors, FileDescriptor pipeFd, PrintStream newStderr)
+           throws ZygoteInit.MethodAndArgsCaller {
+     ...
+           RuntimeInit.zygoteInit(parsedArgs.targetSdkVersion,
+                   parsedArgs.remainingArgs, null /* classLoader */);
+       }
+   }
+```
+
+后续就跟启动Systemserver是一样的，创建binder线程池并通过异常的方式返回ActivityThead.main的Method，在外层run。
