@@ -1136,4 +1136,27 @@ private void handleChildProc(Arguments parsedArgs,
    }
 ```
 
-后续就跟启动Systemserver是一样的，创建binder线程池并通过异常的方式返回ActivityThead.main的Method，在外层run。
+后续就跟启动Systemserver是一样的，创建binder线程池并通过异常的方式返回ActivityThead.main的Method，在外层run，下文就介绍一下ActivityThread的main。
+
+```java
+ public static void main(String[] args) {
+        Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER, "ActivityThreadMain");
+        SamplingProfilerIntegration.start();
+...
+        Looper.prepareMainLooper();//1
+        ActivityThread thread = new ActivityThread();//2
+        thread.attach(false);
+        if (sMainThreadHandler == null) {
+            sMainThreadHandler = thread.getHandler();
+        }
+        if (false) {
+            Looper.myLooper().setMessageLogging(new
+                    LogPrinter(Log.DEBUG, "ActivityThread"));
+        }
+        Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
+        Looper.loop();//3
+        throw new RuntimeException("Main thread loop unexpectedly exited");
+    }
+```
+
+注释1处在当前应用程序进程中创建消息循环，注释2处创建ActivityThread，注释3处调用Looper的loop，使得Looper开始工作，开始处理消息。可以看出，系统在应用程序进程启动完成后，就会创建一个消息循环，用来方便的使用Android的消息处理机制。
