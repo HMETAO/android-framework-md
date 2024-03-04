@@ -1517,3 +1517,106 @@ ActivityManager是一个和AMS相关联的类，它主要对运行中的Activity
 ![VeigPS.png](https://s2.ax1x.com/2019/05/27/VeigPS.png)
 
 ![Vei658.png](https://s2.ax1x.com/2019/05/27/Vei658.png)
+
+## ActivityStack
+
+ActivityStack是一个管理类，用来管理系统所有Activity的各种状态，其内部维护了TaskRecord的列表，因此从Activity任务栈这一角度来说，ActivityStack也可以理解为Activity堆栈。它由ActivityStackSupervisor来进行管理的，而ActivityStackSupervisor在AMS中的构造方法中被创建。
+
+**frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java**
+
+```java
+public ActivityManagerService(Context systemContext) {
+...
+ mStackSupervisor = new ActivityStackSupervisor(this);
+... 
+}
+```
+
+### ActivityStack的实例类型
+
+ActivityStackSupervisor中有多种ActivityStack实例
+
+```java
+public final class ActivityStackSupervisor implements DisplayListener {
+   ...
+    ActivityStack mHomeStack;
+    ActivityStack mFocusedStack;
+    private ActivityStack mLastFocusedStack;
+    ...
+}
+```
+
+mHomeStack用来存储Launcher App的所有Activity，mFocusedStack表示当前正在接收输入或启动下一个Activity的所有Activity。mLastFocusedStack表示此前接收输入的所有Activity。
+
+通过ActivityStackSupervisor提供了获取上述ActivityStack的方法，比如要获取mFocusedStack，只需要调用ActivityStackSupervisor的getFocusedStack方法就可以了
+
+### ActivityState
+
+ActivityStack中通过枚举存储了Activity的所有的状态
+
+**frameworks/base/services/core/java/com/android/server/am/ActivityStack.java**
+
+```java
+enum ActivityState {
+       INITIALIZING,
+       RESUMED,
+       PAUSING,
+       PAUSED,
+       STOPPING,
+       STOPPED,
+       FINISHING,
+       DESTROYING,
+       DESTROYED
+   }
+```
+
+通过名称我们可以很轻易知道这些状态所代表的意义。应用ActivityState的场景会有很多
+
+```java
+@Override
+ public void overridePendingTransition(IBinder token, String packageName,
+         int enterAnim, int exitAnim) {
+  ...
+         if (self.state == ActivityState.RESUMED
+                 || self.state == ActivityState.PAUSING) {//1
+             mWindowManager.overridePendingAppTransition(packageName,
+                     enterAnim, exitAnim, null);
+         }
+         Binder.restoreCallingIdentity(origId);
+     }
+ }
+```
+
+overridePendingTransition方法用于设置Activity的切换动画，注释1处可以看到只有ActivityState为RESUMED状态或者PAUSING状态时才会调用WMS类型的mWindowManager对象的overridePendingAppTransition方法来进行切换动画。
+
+### 特殊状态的Activity
+
+```java
+ActivityRecord mPausingActivity = null;//正在暂停的Activity
+ActivityRecord mLastPausedActivity = null;//上一个已经暂停的Activity
+ActivityRecord mLastNoHistoryActivity = null;//最近一次没有历史记录的Activity
+ActivityRecord mResumedActivity = null;//已经Resume的Activity
+ActivityRecord mLastStartedActivity = null;//最近一次启动的Activity
+ActivityRecord mTranslucentActivityWaiting = null;//传递给convertToTranslucent方法的最上层的Activity
+```
+
+这些特殊的状态都是ActivityRecord类型的，ActivityRecord用来记录一个Activity的所有信息。从Activity任务栈的角度来说，一个或多个ActivityRecord会组成一个TaskRecord，TaskRecord用来记录Activity的栈，而ActivityStack包含了一个或多个TaskRecord。
+
+<img src="https://s2.ax1x.com/2019/05/27/VeivrR.png" title="" alt="VeivrR.png" data-align="center">
+
+## Activity栈管理
+
+我们知道Activity是由任务栈来进行管理的，有了栈管理，我们可以对应用程序进行操作，应用可以复用自身应用中以及其他应用的Activity，节省了资源。比如我们使用一款社交应用，这个应用的联系人详情界面提供了联系人的邮箱，当我们点击邮箱时会跳到发送邮件的界面。
+
+![VeiL24.png](https://s2.ax1x.com/2019/05/27/VeiL24.png)
+
+社交应用和系统Email中的Activity是处于不同应用程序进程的，而有了栈管理，就可以把发送邮件界面放到社交应用中详情界面所在栈的栈顶，来做到跨进程操作。
+
+### Launch Mode
+
+Launch Mode都不会陌生，用于设定Activity的启动方式，无论是哪种启动方式，所启动的Activity都会位于Activity栈的栈顶。有以下四种：
+
+- standerd：默认模式，每次启动Activity都会创建一个新的Activity实例。
+- singleTop：如果要启动的Activity已经在栈顶，则不会重新创建Activity，同时该Activity的onNewIntent方法会被调用。如果要启动的Activity不在栈顶，则会重新创建该Activity的实例。
+- singleTask：如果要启动的Activity已经存在于它想要归属的栈中，那么不会创建该Activity实例，将栈中位于该Activity上的所有的Activity出栈，同时该Activity的onNewIntent方法会被调用。如果要启动的Activity不存在于它想要归属的栈中，并且该栈存在，则会重新创建该Activity的实例。如果要启动的Activity想要归属的栈不存在，则首先要创建一个新栈，然后创建该Activity实例并压入到新栈中。
+- singleInstance：和singleTask基本类似，不同的是启动Activity时，首先要创建在一个新栈，然后创建该Activity实例并压入新栈中，新栈中只会存在这一个Activity实例。
