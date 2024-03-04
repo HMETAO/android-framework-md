@@ -1163,8 +1163,6 @@ private void handleChildProc(Arguments parsedArgs,
 
 # 应用程序从Lanuncher点击到启动的过程
 
-
-
 当我们点击应用程序的快捷图标时就会调用Launcher的startActivitySafely方法。  
 **packages/apps/Launcher3/src/com/android/launcher3/Launcher.java**
 
@@ -1438,3 +1436,84 @@ final boolean realStartActivityLocked(ActivityRecord r, ProcessRecord app,
 ```
 
 这里的 app.thread指的是IApplicationThread，它的实现是ActivityThread的内部类ApplicationThread，其中ApplicationThread继承了ApplicationThreadNative，而ApplicationThreadNative继承了Binder并实现了IApplicationThread接口。
+
+![VeqyvT.png](https://s2.ax1x.com/2019/05/28/VeqyvT.png)
+
+# AMS的启动具体流程
+
+AMS是由SystemServer启动的，调用SystemServer.main方法最后在startBootstrapServices中创建
+
+```java
+private void startBootstrapServices() {
+     Installer installer = mSystemServiceManager.startService(Installer.class);
+     // Activity manager runs the show.
+     mActivityManagerService = mSystemServiceManager.startService(
+             ActivityManagerService.Lifecycle.class).getService();//1
+     mActivityManagerService.setSystemServiceManager(mSystemServiceManager);
+     mActivityManagerService.setInstaller(installer);
+   ...
+ }
+```
+
+在注释1处调用了SystemServiceManager的startService方法，方法的参数是ActivityManagerService.Lifecycle.class：
+
+**frameworks/base/services/core/java/com/android/server/SystemServiceManager.java**
+
+```java
+@SuppressWarnings("unchecked")
+  public <T extends SystemService> T startService(Class<T> serviceClass) {
+      try {
+         ...
+          final T service;
+          try {
+              Constructor<T> constructor = serviceClass.getConstructor(Context.class);//1
+              service = constructor.newInstance(mContext);//2
+          } catch (InstantiationException ex) {
+            ...
+          }
+          // Register it.
+          mServices.add(service);//3
+          // Start it.
+          try {
+              service.onStart();//4
+          } catch (RuntimeException ex) {
+              throw new RuntimeException("Failed to start service " + name
+                      + ": onStart threw an exception", ex);
+          }
+          return service;
+      } finally {
+          Trace.traceEnd(Trace.TRACE_TAG_SYSTEM_SERVER);
+      }
+  }
+```
+
+startService方法传入的参数是Lifecycle.class，Lifecycle继承自SystemService。首先，通过反射来创建Lifecycle实例，注释1处得到传进来的Lifecycle的构造器constructor，在注释2处调用constructor的newInstance方法来创建Lifecycle类型的service对象。接着在注释3处将刚创建的service添加到ArrayList类型的mServices对象中来完成注册。最后在注释4处调用service的onStart方法来启动service，并返回该service。
+
+**frameworks/base/services/core/java/com/android/server/am/ActivityManagerService.java**
+
+```java
+ public static final class Lifecycle extends SystemService {
+     private final ActivityManagerService mService;
+     public Lifecycle(Context context) {
+         super(context);
+         mService = new ActivityManagerService(context);//1
+     }
+     @Override
+     public void onStart() {
+         mService.start();//2
+     }
+     public ActivityManagerService getService() {
+         return mService;//3
+     }
+ }
+```
+
+上面的代码结合SystemServiceManager的startService方法来分析，当通过反射来创建Lifecycle实例时，会调用注释1处的方法创建AMS实例，当调用Lifecycle类型的service的onStart方法时，实际上是调用了注释2处AMS的start方法。所以外部注册后getService返回的就是AMS对象。
+
+## AMS家族
+
+ActivityManager是一个和AMS相关联的类，它主要对运行中的Activity进行管理，这些管理工作并不是由ActivityManager来处理的，而是交由AMS来处理，ActivityManager中的方法会通过ActivityManagerNative（以后简称AMN）的getDefault方法来得到ActivityManagerProxy(以后简称AMP)，通过AMP就可以和AMN进行通信，而AMN是一个抽象类，它会将功能交由它的子类AMS来处理，因此，AMP就是AMS的代理类。AMS作为系统核心服务，很多API是不会暴露给ActivityManager的，因此ActivityManager并不算是AMS家族一份子。
+
+![VeigPS.png](https://s2.ax1x.com/2019/05/27/VeigPS.png)
+
+![Vei658.png](https://s2.ax1x.com/2019/05/27/Vei658.png)
